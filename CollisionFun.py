@@ -7,9 +7,14 @@ import random
 os.environ["SDL_VIDEO_WINDOW_POS"] = "%d, %d" % (5, 5)
 pygame.init()
 
-wS = 500
+wS = 600
 
 window = pygame.display.set_mode((wS, wS), 0, 0)
+
+center = [wS/2, wS/2]
+centerMass = 100000000000
+G = 0.0000000000667408
+pi = math.pi
 
 scalar = 4
 avgPull = 0
@@ -21,18 +26,21 @@ avgNumerator = 0
 sumNumerator = 0
 maxNum = 0
 minNum = 1000
+density = 10
 
 showInfo = False
+gravEnabled = False
 
 class Obstacle:
     def __init__(self, position, velocity, radius, elasticity, mass, color):
         self.position = position
         self.velocity = velocity
-        self.radius = radius
+        self.radius = (mass / density)
         self.color = color
         self.angle = math.atan(velocity[1]/velocity[0])
         self.elasticity = elasticity
         self.mass = mass
+
 
 
     def getPosition(self):
@@ -59,16 +67,15 @@ class Obstacle:
     def move(self):
         self.position[0] += self.velocity[0]
         self.position[1] += self.velocity[1]
-        if self.position[0] > wS or self.position[0] < 0:
-            self.position[0] += wS * sign(self.position[0]) * -1
-        if self.position[1] > wS or self.position[1] < 0:
-            self.position[1] += wS * sign(self.position[1]) * -1
+        self.position[0] %= wS
+        self.position[1] %= wS
 
 
     def softCollisions(self, obs):
         loc = self.position
         rad = self.radius
         newV = self.velocity
+        m = self.mass
 
         for i in range(len(obs)):
 
@@ -84,7 +91,10 @@ class Obstacle:
                     global maxPull
                     global instances
 
-
+                    #the percent of the net mass (both masses combined) that the other object is
+                    oM = obs[i].getMass()
+                    tM = m + oM
+                    opM = oM/tM
 
                     dispX = (oP[0] - loc[0])
                     dispY = (oP[1] - loc[1])
@@ -93,26 +103,41 @@ class Obstacle:
                     angB = math.acos(dispX / mag)
                     t = math.cos(angB) / math.fabs(math.cos(angB))
 
-
-
                     pull = -(math.e / 10) / ((d) ** 2)
 
-
-                    instances += 1
-                    sumPull += pull
-                    avgPull = sumPull / instances
-
-                    if math.fabs(pull) < math.fabs(minPull):
-                        minPull = pull
-                    if math.fabs(pull) > math.fabs(maxPull):
-                        maxPull = pull
-
-                    newV[0] += pull * math.cos(angA) * scalar * t
-                    newV[1] += pull * math.sin(angA) * scalar * t
+                    newV[0] += pull * math.cos(angA) * scalar * t * opM
+                    newV[1] += pull * math.sin(angA) * scalar * t * opM
+                    newV[0] *= obs[i].getElasticity()
+                    newV[1] *= obs[i].getElasticity()
 
 
         return newV
 
+    def gravity(self):
+        global center
+        global centerMass
+        global G
+
+        pos = self.position
+
+        dif = [pos[0] - center[0], pos[1] - center[1]]
+        cAng = math.atan(dif[1]/dif[0])
+        mag = dist(dif[0], dif[1])
+        bAng = math.acos(dif[0] / mag)
+        t = math.cos(bAng)/math.fabs(math.cos(bAng))
+
+        d = dist(pos, center)
+
+        newV = self.getVelocity()
+
+        newV[0] -= ((centerMass * G)/(d ** 2)) * math.cos(cAng) * t
+        newV[1] -= ((centerMass * G)/(d ** 2)) * math.sin(cAng) * t
+
+
+
+        pygame.draw.circle(window, (250, 250, 250), (int(center[0]), int(center[1])), 10)
+
+        return newV
 
 
 
@@ -128,9 +153,12 @@ def Obstacles(obs):
         position = obs[i].getPosition()
         color = obs[i].getColor()
         radius = obs[i].getRadius()
-        #collisions, newV = obs[i].isColliding(obs)
-        #newVs.append(newV)
+
         newVs.append(obs[i].softCollisions(obs))
+        if gravEnabled:
+            newVs.pop(len(newVs) - 1)
+            newVs.append(obs[i].gravity())
+
 
         pygame.draw.circle(window, (int(color[0]), int(color[1]), int(color[2])), (int(position[0]), int(position[1])), int(radius))
 
@@ -166,41 +194,17 @@ def hud(fps):
         frames = font.render("FPS: " + str(math.floor(fps)), False, (250, 250, 250))
         window.blit(frames, (2, 2))
 
-
-        global avgPull
-        global maxPull
-        global minPull
-
-
-
-        WHITE = (250, 250, 250)
-
-
-
-        avg = font.render("Average pull: " + str(avgPull), False, WHITE)
-        maX = font.render("Max pull: " + str(maxPull), False, WHITE)
-        miN = font.render("Min pull: " + str(minPull), False, WHITE)
-        window.blit(avg, (wS - 200, 2))
-        window.blit(maX, (wS - 200, 20))
-        window.blit(miN, (wS - 200, 38))
-
-
-
-
-
-
-
-
 def run():
     clock = pygame.time.Clock()
 
-    numOfObs = 20
+    numOfObs = 30
     obstacles = []
     maxR = 7
     minR = 2
-    maxV = 0.1
+    maxV = 1
     maxE = 1
-    maxM = 1
+    minE = 0.9
+    maxM = 100
     minM = 1
 
 
@@ -213,10 +217,11 @@ def run():
                 if dist(pos, obstacles[u].getPosition()) > 80:
                     overlapping = False
 
-        obstacles.append(Obstacle(pos, [rand(-maxV, maxV), rand(-maxV, maxV)], rand(minR, maxR), rand(0.2, maxE), rand(minM, maxM), (int(rand(0, 250)), int(rand(0, 250)), int(rand(0, 250)))))
+        obstacles.append(Obstacle(pos, [rand(-maxV, maxV), rand(-maxV, maxV)], rand(minR, maxR), rand(minE, maxE), rand(minM, maxM), (int(rand(0, 250)), int(rand(0, 250)), int(rand(0, 250)))))
 
 
     global showInfo
+    global gravEnabled
 
     while True:
         window.fill((0, 0, 0))
@@ -233,6 +238,12 @@ def run():
             showInfo = True
         else:
             showInfo = False
+
+        if keys[pygame.K_g]:
+            gravEnabled = True
+        else:
+            gravEnabled = False
+
 
         Obstacles(obstacles)
         hud(clock.get_fps())
